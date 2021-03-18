@@ -7,7 +7,6 @@ runtime: shiny_prerendered
 ```{r setup, include=FALSE}
 library(learnr)
 knitr::opts_chunk$set(echo = FALSE, comment = "", fig.height = 5, fig.align = "center", out.width = "80%")
-#setwd("~/Google Drive/University of Liverpool/LIFE223/202021/Regression Lecture")
 require(palmerpenguins)
 require(ggplot2)
 require(DAAG)
@@ -200,7 +199,7 @@ If the results are being presented only in the text it is usually appropriate to
 A plant physiologist studying the process of germination in the broad bean (_Vicia faba_) is interested in the relationship between the activity of the enzyme amylase, and the temperature at which the germinating beans are kept. As part of this work she carries out an experiment to find the relationship between glucose release (from the breakdown of starch by amylase) and temperature (over the range 2 - 20C). The data obtained from such an experiment are given in the file glucose.csv.
 
 ```{r, echo=FALSE, warning=FALSE, message=FALSE}
-glucose <- read.csv("glucose.csv")
+glucose <- read.csv("data/glucose.csv")
 ggplot(glucose, aes(x = Temperature, y = Glucose)) +
   geom_point(size = 2.5) +
   labs(x = "Temperature", y = "Glucose") +
@@ -302,7 +301,7 @@ $$ log(y) = log(a) + b~log(x) $$
 Let's look at an example from the lectures. Here we have data on brain and body size in two groups of animals: Cetaceans and marsupials. Data are available in the file __Braindata.csv__
 
 ```{r}
-brains <- read.csv("Braindata.csv", header = T)
+brains <- read.csv("data/Braindata.csv", header = T)
 knitr::kable(head(brains), digits = 3) %>% 
   kable_minimal(full_width = F)
 ```
