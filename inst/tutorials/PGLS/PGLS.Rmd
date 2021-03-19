@@ -1,0 +1,309 @@
+---
+title: "PGLS in R"
+output: learnr::tutorial
+runtime: shiny_prerendered
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+knitr::opts_chunk$set(echo = FALSE, comment = "", fig.height = 5, fig.align = "center", out.width = "80%")
+require(magick)
+require(png)
+require(ggplot2)
+require(phytools)
+require(caper)
+require(ape)
+require(dplyr)
+```
+
+## Introduction
+
+Ordinary least squares regression assumes (like many statistical analyses) that the data points are independent. If true, this means that the value of one data point has no bearing on any other data points. When we're analysing species, this isn't the case!
+
+Species-level biological data are not independent because species share evolutionary history. The more closely related species are to each other, the more phenotypically similar they are likely to be just because of the amount of shared evolutionary history. Such a pattern of relatedness between data point scould give us some misleading statistical results.
+
+This tutorial introduces the concept of Phylogenetic Generalised Least Squares (PGLS) analysis. PGLS controls for the non-independence of data caused by shared evolutionary history and allows us to perform regressions on species-level data that we can trust.
+
+## Data
+
+Let's investigate some data on primate life histories.
+
+```{r}
+primate.data <- read.table("data/primates_data.txt", header = T)[,c(2:8)]
+knitr::kable(head(primate.data)) %>% 
+  kableExtra::kable_minimal(full_width = F)
+```
+
+You can see that we have quite a few variables to contend with in this dataset. The first two columns are just taxonomic information and the others are continuous data describing the life history of each species.
+
+```{r}
+names(primate.data)
+```
+
+## Topic 1: Linear regression
+
+Simple linear regression will be familiar to you from LIFE223. The principle is to find out what the relationship is between two or more variables.
+
+To see if body mass and gestation length are related in primates, the best way to go would seem to be a traditional linear regression. The function to perform an ordinary least squares linear regression is **lm()**. The first argument is our model, stating in this case that body mass predicts gestation length. Then we specify the data object to tell R where to find the data.
+
+```{r prim_linear, exercise = TRUE, exercise.eval = F}
+m1 <- lm()
+summary(m1)
+```
+```{r prim_linear-hint}
+m1 <- lm(GestationLen_d ~ log10(AdultBodyMass_g), data = primate.data)
+```
+
+
+The key parts of our output are the coefficients table and the three lines of output below it which contain the R^2^ value. Here, it's telling us that our model is a significant fit to the data as we might expect. Also, the mid-range R^2^ (0.50) is what we'd expect given the spread of data in the plot.
+
+```{r, message=FALSE, warning=FALSE}
+ggplot(data = primate.data, aes(x = log10(AdultBodyMass_g), y = GestationLen_d)) +
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_classic() +
+  labs(x = "Log Body Mass", y = "Gestation Length (days)")
+```
+
+## Topic 2: Phylogenetic signal
+
+As you know, the fact that comparative data points are not statistically independent is a problem for these kind of analyses. Therefore we need to run a phylogenetically corrected analysis. Phylogenetic regression dates back a while and there have been many different ways to do it. To understand the logic behind the method, we will first consider the concept of phylogenetic signal.
+
+Phylogenetic signal is defined as *the tendency for closely related species to resemble each other more than distantly related species*.
+
+For example, body mass is (usually) a trait with a strong phylogenetic signal. What this means in primates is that although there is a broad range of body sizes from a few tens of grams up to around 200kg, the distribution of body masses closely follows the pattern of relatedness. Large primates like orangutan, gorillas, chimps and humans are all closely related for example.
+
+The degree of phylogenetic signal in a trait is often described using the scaling parameter $\lambda$. $\lambda$ varies between 0 and 1 and is used to multiply the internal branch lengths so that the tree describes the pattern of variation in the trait.
+
+For example, take the case on the left, where $\lambda = 1$. In this case the tree is untransformed because the variation in the trait follows the structure of the tree. On the right, where $\lambda = 0$, all the internal branch lengths have been multiplied by 0 and therefore collapsed. This "star phylogeny" describes a pattern of variation in which the trait varies at random with respect to the phylogeny. The trait is not equal across the tree but rather the variation in the trait does not correlate to the pattern of relatedness.
+
+```{r,echo=F, eval=TRUE, warning=FALSE, message = FALSE, fig.align='center', fig.height = 4}
+require(phytools)
+par(mfrow = c(1,2))
+par(mar = c(0.5,0.5,2,0.5))
+tree <- pbtree(n = 13, scale = 42)
+plot(tree, tip.color = "white",
+     edge.width = 4, no.margin = F,
+     main = expression(paste(lambda, "= 1")))
+tree1 <- starTree(species = rep("A",13))
+plot(tree1, tip.color = "white",
+     edge.width = 4, no.margin = F, 
+     main = expression(paste(lambda, "= 0")))
+rm(tree, tree1)
+par.default <- par(no.readonly = T)
+par(par.default)
+```
+
+## Topic 3: Calculating phylogenetic signal
+
+Here we will use the package __caper__ to calculate the phylogenetic signal in primate gestation length.
+
+```{r, echo=TRUE, eval=FALSE}
+library(caper)
+```
+
+First we need our phylogeny, which we can load using the function read.nexus from __ape__.
+
+```{r, echo=TRUE, eval=TRUE}
+primate.tree <- read.nexus("data/primate_tree.nex")
+```
+
+```{r, fig.height=7}
+plot(primate.tree, cex = 0.2, no.margin = T)
+```
+
+### Prepare the data
+
+The regression command in __caper__ (along with some other functions) requires the data and tree to be combined in a __comparative data object__. This type of object is simply a tree and comparative data set concatenated and is created using the function __comparative.data__. We need to specify the tree object, data object, column name in the data where species names are stored and whether we want a variance-covariance matrix included (we do).
+
+```{r, echo=TRUE, eval=TRUE}
+primates <- comparative.data(phy = primate.tree,     #Our tree
+                             data = primate.data,    #Our data
+                             names.col = Binomial,   #Species names
+                             vcv = TRUE,             #VCV matrix
+                             na.omit = FALSE,        #Don't drop missing data
+                             warn.dropped = TRUE)
+```
+
+This warning message isn't really a problem. If you look at the tree and data I provided, you'll see that the tree has about 200 species but the datafile contains data for only 91. Therefore we expected R to drop some species when compiling the comparative data object. In fact, we asked it warn us if it did so!
+
+### Calculate the phylogenetic signal
+
+Let's estimate the phylogenetic signal of gestation length in primates. The key is to remember that we need to call our comparative data object and not the data file we loaded up at the start. We're running the trait on its own (hence the **~ 1**) and estimating lambda by maximum likelihood.
+
+```{r, echo=TRUE, eval=TRUE}
+signal <- pgls(GestationLen_d ~ 1, data = primates, lambda = "ML")
+summary(signal)
+```
+
+This output has a lot in common with a basic regression output. That's because it is one! We used the **pgls** function which performs a regression with phylogenetic correction. Because we included no predictors, the value of $\lambda$ we estimate here corresponds only to this one trait.
+
+The key part for us is the **Branch length transformations** section of the output. $\kappa$ and $\delta$ are fixed at 1 and so we aren't concerned with those for now. $\lambda$ is estimated at 0.909. That's a pretty strong phylogenetic signal.
+
+We also have lower bound and upper bound tests. We can see that $\lambda$ is significantly different from the lower bound of 0 (p < 2.2 x 10^-16^).
+
+The upper bound test shows us that $\lambda$ is also significantly different from 1 (p < 0.001). This means that we can't assume that gestation length has evolved by Brownian motion, in which case $\lambda$ would equal 1 and the variation in trait would simply reflect the pattern of relatedness amongst species.
+
+### Exercise
+
+Edit the code below to estimate the phylogenetic signal of Body Mass (AdultBodyMass_g) in primates.
+
+```{r phylo-signal, exercise = TRUE, exercise.eval = FALSE}
+phylo.signal <- pgls()
+summary(phylo.signal)
+```
+```{r phylo-signal-hint}
+phylo.signal <- pgls(log10(AdultBodyMass_g) ~ 1, data = primates, lambda = "ML")
+```
+
+```{r quiz_1}
+quiz(
+  question("What did we get for lambda?",
+    answer("0.990", message = "Try again..."),
+    answer("0.757", message = "Try again..."),
+    answer("1.000", correct = TRUE),
+    answer("0.899", message = "Try again..."),
+    random_answer_order = T, allow_retry = T),
+  question("What does this mean we can infer about body mass?",
+    answer("It evolved following Brownian motion", correct = TRUE),
+    answer("It hasn't been evolving in primates", message = "Certainly not. The fact that the trait correlates very closely with the phylogeny doesn't mean no change or that evolution isn't happening."),
+    random_answer_order = T, allow_retry = T)
+)
+```
+
+## Topic 4: PGLS regression
+
+Now let's have a go at performing a PGLS regression!
+
+Let's say we have a hypothesis that larger species of primate have longer gestations. Our plot seems to back this up but how strong is this relationship?
+
+```{r}
+ggplot(data = primate.data) +
+  geom_point(mapping = aes(x = log10(AdultBodyMass_g), y = GestationLen_d),
+             colour = "forestgreen") +
+  theme_classic() +
+  labs(x = "Log Body Mass", y = "Gestation Length")
+```
+
+We found earlier that there does seem to be a relationship but ordinary least squares linear regression can't be relied upon in this situation. This is because of the statistical non-independence of data points due to shared evolutionary history!
+
+### Exercise: Fit a PGLS model to the primate data
+
+A **phylogenetic generalised least squares regression** (PGLS) uses a covariance matrix to correct the analysis for this statistical non-independence. Put simply, the PGLS assumes the residuals are more similar in more closely related species rather than being randomly distributed as in linear regression.
+
+As you've already seen, the function we need here is **pgls**. The model is constructed exactly as before but this time, we need to construct a full model. We'll be estimating $\lambda$ by maximum likelihood again.
+
+```{r primate_pgls, exercise=TRUE, exercise.eval=FALSE}
+m2 <- pgls()
+summary(m2)
+```
+```{r primate_pgls-hint}
+m2 <- pgls(GestationLen_d ~ log10(AdultBodyMass_g), data = primates, lambda = "ML")
+```
+
+As you can see, our model is a significant fit to the data (F = 33.3, R^2^ = 0.29, p = 1.39 x 10^-7^). More importantly, We've confirmed that body size has a positive effect on gestation length ($\beta$ = 33.75, s.e. = 5.85, p = 1.39 x 10^-7^). Time to plot!
+
+```{r, echo=F, eval = TRUE, message=FALSE, warning = FALSE}
+m2 <- pgls(GestationLen_d ~ log10(AdultBodyMass_g), data = primates, lambda = "ML")
+library(dplyr)
+primates$data %>%
+  mutate(my_model = predict(m2)) %>%
+  ggplot() +
+  geom_point(aes(log10(AdultBodyMass_g), GestationLen_d), colour = "forestgreen") +
+  geom_line(aes(log10(AdultBodyMass_g), my_model), 
+            colour = "red", lwd = 1) +
+  theme_classic() +
+  labs(x = "Log Body Mass", y = "Gestation Length")
+```
+
+## Topic 5: Checking your PGLS model
+
+Now, we need to run some diagnostic checks. 
+
+### Lambda
+
+We should start with the likelihood surface of $\lambda$ since we estimated it by maximum likelihood. We begin by using the **pgls.profile** function to extract the likelihoods and then simply plot them. What we are looking for is a single peak around our estimated value. If we get a flat surface or multiple peaks, there might be an issue somewhere.
+```{r, echo=TRUE, eval=TRUE}
+lambda.profile <- pgls.profile(m2, which = "lambda")
+plot(lambda.profile)
+```
+
+This plot describes the log likelihood of $\lambda$ across its possible range of values (0 - 1). We can clearly see that the likelihood is highest around a single point around 0.8. Check back against the model output earlier to see if this is what we would expect.
+
+### Outliers
+
+Next we need to identify any outliers in the model residuals. The first step here is to extract the residuals from the model, making sure to tell R that we want the phylogenetic residuals. The model output of pgls actually stores both phylogenetic and non-phylogenetic residuals. We can then standardise the residuals by dividing through by the square root of the variance.
+```{r, echo=TRUE, eval=TRUE}
+res <- residuals(m2, phylo = TRUE)
+res <- res/sqrt(var(res))[1]
+```
+
+The general rule of thumb is that any standardised residual with an absolute value greater than 3 is an outlier and needs to be removed from the analysis. Here, I'm just assigning the species names to the **res** object so we can tell which species are the outliers (if any).
+```{r, echo=TRUE, eval=TRUE}
+rownames(res) <- rownames(m2$residuals)
+rownames(res)[abs(res)>3]
+```
+
+Outliers! Maybe they're causing problems and maybe they aren't. We need to check that by re-running our analysis without them. A simple line of code will take our existing comparative data object and drop out the named outliers.
+```{r, echo=TRUE, eval=TRUE}
+primates.nooutliers <- primates[-which(abs(res)>3),]
+```
+
+### Exercise: Re-run the PGLS model
+
+Now simply re-run the model, remembering to direct R to the new data object.
+```{r primate_pgls2, exercise=TRUE, exercise.eval=FALSE}
+m3 <- pgls()
+summary(m3)
+```
+```{r primate_pgls2-hint}
+m3 <- pgls(GestationLen_d ~ log10(AdultBodyMass_g), data = primates.nooutliers, lambda = "ML")
+```
+
+
+If the results have barely changed then it's usually safe to assume those outliers didn't have too much influence over your analysis. In our case, it seems that although those two lemurs were outliers, they weren't effecting the analysis too much. Let's check for outliers in this new model.
+```{r}
+m3 <- pgls(GestationLen_d ~ log10(AdultBodyMass_g), data = primates.nooutliers, lambda = "ML")
+```
+```{r primates_outliers, exercise=TRUE, exercse.eval=FALSE}
+
+```
+```{r primates_outliers-hint}
+res <- residuals(m3, phylo = TRUE)
+res <- res/sqrt(var(res))[1]
+rownames(res) <- rownames(m3$residuals)
+rownames(res)[abs(res)>3]
+```
+
+```{r quiz_2}
+quiz(
+  question("Did removing our two ouliers help?",
+    answer("No. There is another outlier in our new model!", correct = TRUE, 
+           message = "Sh...ugar. Oh well. It's a simple procedure to drop this new one as well just to be safe."),
+    answer("Yes", message = "Check your residuals again..."),
+    random_answer_order = T, allow_retry = T  )
+)
+```
+
+### Model diagnostics
+
+Finally, we can check the diagnostic plots of the model. I've included some lines to help arrange the plots. To view the plots for model diagnostics, we can simply plot the model object!
+```{r, echo=TRUE, eval=TRUE, fig.height = 7}
+par.default <- par(no.readonly = T) #Save default plotting parameters
+par(mfrow=c(2,2)) #Set the plot window to show 4 different plots
+plot(m3)
+par(par.default) #Reset plot window to default
+```
+
+The top left panel shows the distribution of our residuals. We can see a bump near +3. That will be our outlier that needs to be dropped before we proceed any further. The top right plot closely approximates a straight line so that's good. The bottom left shows no real pattern which is also good. The bottom right graph should show a correlation (and it seems to) with the points more or less equally scattered above and below the 45^o^ diagonal. Along that line, the observed and fitted values would be exactly equal.
+
+## Conclusion
+
+So that's how to perform a simple PGLS analysis. This kind of analysis is great for attempting make causal connections between traits of extant species, thus inferring a connection over evolutionary history. For example, we hypothesised that the reason some primates have longer gestation periods is that they have larger body sizes and the PGLS confirmed our suspicion. More complex regressions can include multpile predictors and that's what we'll look at next.
+
+By the way, always make sure to check your models for outliers! In this analysis the gray mouse lemur was an outlier and we had to drop it. Outliers like this can throw off your analysis. If we hadn't checked, we would have presented the analysis in a paper and then had it invalidated when someone checked up on it. Fortunately in this case, the outliers didn't really change the outcome so the gray mouse lemur is off the hook. Look how relieved she is!
+
+```{r, echo = FALSE, eval=TRUE, out.width="90%"}
+knitr::include_graphics('images/mouselemur.jpg')
+```
+
